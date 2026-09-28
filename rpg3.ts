@@ -1,4 +1,6 @@
 import * as fs from 'fs';
+import { createInterface } from 'node:readline/promises';
+import { stdin as input, stdout as output } from 'node:process';
 
 // ARMAS
 
@@ -1065,12 +1067,13 @@ export class Jogo {
     );
   }
 
-  atacar(): void {
+  atacar(indiceAlvo: number = 0): void {
     if (this.jogoTerminado) {
       return;
     }
 
-    const alvo = this.inimigosVivos()[0];
+    const inimigos = this.inimigosVivos();
+    const alvo = inimigos[indiceAlvo];
 
     if (!alvo) {
       return;
@@ -1081,7 +1084,7 @@ export class Jogo {
   }
 
   // O Jogo só repassa o índice. Não sabe qual habilidade é.
-  usarHabilidade(indice: number): void {
+  usarHabilidade(indice: number, indiceAlvo: number = 0): void {
     if (this.jogoTerminado) {
       return;
     }
@@ -1092,7 +1095,14 @@ export class Jogo {
       return;
     }
 
-    const usou = this.heroi.usarHabilidade(indice, vivos[0], vivos);
+    const alvo = vivos[indiceAlvo];
+
+    if (!alvo) {
+      console.log("Inimigo inválido!");
+      return;
+    }
+
+    const usou = this.heroi.usarHabilidade(indice, alvo, vivos);
 
     // Se não conseguiu usar (cooldown/mana), o jogador pode tentar outra ação.
     if (usou) {
@@ -1191,9 +1201,8 @@ export class Jogo {
   }
 }
 
-// INICIAR JOGO
+// INICIAR JOGO - INTERFACE INTERATIVA NO TERMINAL
 
-// Índices das habilidades: 0 Bola de Fogo | 1 Cura | 2 Golpe Poderoso | 3 Explosão | 4 Roubo de Vida
 const heroi = new Heroi("Aline", 200, 100, POOL_DE_ARMAS[0], [
   new BolaDeFogo(),
   new Cura(),
@@ -1203,57 +1212,234 @@ const heroi = new Heroi("Aline", 200, 100, POOL_DE_ARMAS[0], [
 ]);
 
 const jogo = new Jogo(heroi);
-jogo.iniciar();
 
-// Teste de Save: Salvando o jogo logo no Início no Slot 0
-jogo.salvarJogo(0);
+const readline = createInterface({ input, output });
 
-function lutar(limiteDeTurnos: number = 30): void {
-  for (let i = 0; i < limiteDeTurnos; i++) {
-    if (jogo.terminou() || !jogo.temInimigosVivos()) return;
-    jogo.atacar();
+async function perguntarNumero(pergunta: string): Promise<number> {
+  while (true) {
+    const resposta = await readline.question(pergunta);
+    const numero = Number(resposta);
+
+    if (Number.isFinite(numero)) {
+      return numero;
+    }
+
+    console.log("Digite um número válido.");
   }
 }
 
-// --- FASE 1: dois inimigos (Explosão atinge os dois) ---
-console.log("\n--- [Ação] Fase 1: Explosão ---");
-jogo.usarHabilidade(3);
-console.log("\n--- [Ação] Explosão de novo (cooldown, turno não passa) ---");
-jogo.usarHabilidade(3);
-console.log("\n--- [Ação] Bola de Fogo ---");
-jogo.usarHabilidade(0);
-console.log("\n--- [Ação] Golpe Poderoso ---");
-jogo.usarHabilidade(2);
-lutar();
-jogo.proximaFase();
+function mostrarStatus(): void {
+  const h = jogo.getHeroi();
+  const fase = jogo.getFaseAtual();
 
-// Teste de Save: Salvando o jogo após a Fase 1 no Slot 1
-jogo.salvarJogo(1);
+  console.log("\n========== STATUS ==========");
+  console.log(`Herói: ${h.nome}`);
+  console.log(`Vida: ${h.getVida()}/${h.getVidaMaxima()}`);
+  console.log(`Mana: ${h.getMana()}/${h.getManaMaxima()}`);
+  console.log(`Nível: ${h.getNivel()}`);
+  console.log(`Arma: ${h.getArma().nome}`);
+  console.log(`Fase: ${fase.numero} - ${fase.nome}`);
+}
 
-// --- FASE 2: Cofre de Armas ---
-console.log("\n--- [Ação] Resolvendo Puzzle na Fase 2 ---");
-jogo.resolverPuzzle("4321");
-console.log("\n--- [Ação] Roubo de Vida ---");
-jogo.usarHabilidade(4);
-lutar();
-jogo.proximaFase();
+function mostrarInimigos(apenasVivos: boolean = false): void {
+  const todos = jogo.getFaseAtual().inimigos ?? [];
+  const inimigos = apenasVivos ? todos.filter((i) => i.estaVivo()) : todos;
 
-// Teste de Save: Salvando o jogo após a Fase 2 no Slot 2
-jogo.salvarJogo(2);
+  console.log("\n========== INIMIGOS ==========");
 
-// --- FASE 3: Laboratório ---
-console.log("\n--- [Ação] Resolvendo Puzzle na Fase 3 ---");
-jogo.resolverPuzzle(20);
-lutar();
-jogo.proximaFase();
+  inimigos.forEach((inimigo, indice) => {
+    const estado = inimigo.estaVivo() ? "VIVO" : "DERROTADO";
+    console.log(
+      `${indice + 1}. ${inimigo.nome} - Vida: ${inimigo.getVida()}/${inimigo.getVidaMaxima()} - ${estado}`
+    );
+  });
+}
 
-// --- FASE 4: Arena ---
-console.log("\n--- [Ação] Cura ---");
-jogo.usarHabilidade(1);
-lutar();
-jogo.proximaFase();
+async function atacar(): Promise<void> {
+  const inimigos = (jogo.getFaseAtual().inimigos ?? []).filter((i) =>
+    i.estaVivo()
+  );
 
-// --- FASE 5: Sala Final ---
-console.log("\n--- [Ação] Combate Final na Fase 5 ---");
-lutar(60);
-jogo.proximaFase();
+  if (inimigos.length === 0) {
+    console.log("Não há inimigos vivos nesta fase.");
+    return;
+  }
+
+  mostrarInimigos(true);
+  const escolha = await perguntarNumero("Escolha o inimigo: ");
+  const indice = escolha - 1;
+
+  if (!inimigos[indice]) {
+    console.log("Inimigo inválido.");
+    return;
+  }
+
+  // O método do Jogo recebe o índice entre os inimigos vivos.
+  jogo.atacar(indice);
+}
+
+async function usarHabilidade(): Promise<void> {
+  const habilidades = [
+    "Bola de Fogo",
+    "Cura",
+    "Golpe Poderoso",
+    "Explosão",
+    "Roubo de Vida",
+  ];
+
+  console.log("\n========== HABILIDADES ==========");
+  habilidades.forEach((nome, indice) => {
+    console.log(`${indice + 1}. ${nome}`);
+  });
+
+  const escolhaHabilidade = await perguntarNumero("Escolha a habilidade: ");
+  const indiceHabilidade = escolhaHabilidade - 1;
+
+  if (indiceHabilidade < 0 || indiceHabilidade >= habilidades.length) {
+    console.log("Habilidade inválida.");
+    return;
+  }
+
+  // Cura não precisa de um inimigo, mas o método atual do jogo recebe um alvo.
+  // Para as outras habilidades, o jogador escolhe o alvo normalmente.
+  if (indiceHabilidade === 1) {
+    jogo.usarHabilidade(indiceHabilidade, 0);
+    return;
+  }
+
+  const inimigos = (jogo.getFaseAtual().inimigos ?? []).filter((i) =>
+    i.estaVivo()
+  );
+
+  if (inimigos.length === 0) {
+    console.log("Não há inimigos vivos nesta fase.");
+    return;
+  }
+
+  mostrarInimigos(true);
+  const escolhaAlvo = await perguntarNumero("Escolha o alvo: ");
+  const indiceAlvo = escolhaAlvo - 1;
+
+  if (!inimigos[indiceAlvo]) {
+    console.log("Inimigo inválido.");
+    return;
+  }
+
+  jogo.usarHabilidade(indiceHabilidade, indiceAlvo);
+}
+
+async function resolverPuzzle(): Promise<void> {
+  const fase = jogo.getFaseAtual();
+
+  if (!fase.puzzle) {
+    console.log("Esta fase não possui puzzle.");
+    return;
+  }
+
+  if (fase.puzzle === "senha") {
+    console.log("\nO cofre pede uma senha de 4 dígitos.");
+    const resposta = await readline.question("Digite a senha: ");
+    jogo.resolverPuzzle(resposta);
+    return;
+  }
+
+  if (fase.puzzle === "matematica") {
+    console.log("\nResolva a operação: 12 + 8");
+    const resposta = await perguntarNumero("Resposta: ");
+    jogo.resolverPuzzle(resposta);
+  }
+}
+
+async function salvarJogo(): Promise<void> {
+  const slot = await perguntarNumero("Escolha o slot para salvar (0, 1, 2...): ");
+
+  if (!Number.isInteger(slot) || slot < 0) {
+    console.log("O slot deve ser um número inteiro maior ou igual a zero.");
+    return;
+  }
+
+  jogo.salvarJogo(slot);
+}
+
+async function carregarJogo(): Promise<void> {
+  const slot = await perguntarNumero("Escolha o slot para carregar: ");
+
+  if (!Number.isInteger(slot) || slot < 0) {
+    console.log("O slot deve ser um número inteiro maior ou igual a zero.");
+    return;
+  }
+
+  jogo.carregarJogo(slot);
+}
+
+async function menu(): Promise<void> {
+  jogo.iniciar();
+
+  while (!jogo.terminou()) {
+    console.log(`
+==============================
+          MENU DO JOGO
+==============================
+1. Atacar
+2. Usar habilidade
+3. Ver status
+4. Ver inimigos
+5. Ver inventário
+6. Resolver puzzle
+7. Próxima fase
+8. Salvar jogo
+9. Carregar jogo
+0. Sair
+==============================`);
+
+    const opcao = await perguntarNumero("Escolha uma opção: ");
+
+    switch (opcao) {
+      case 1:
+        await atacar();
+        break;
+
+      case 2:
+        await usarHabilidade();
+        break;
+
+      case 3:
+        mostrarStatus();
+        break;
+
+      case 4:
+        mostrarInimigos();
+        break;
+
+      case 5:
+        jogo.getHeroi().mostrarInventario();
+        break;
+
+      case 6:
+        await resolverPuzzle();
+        break;
+
+      case 7:
+        jogo.proximaFase();
+        break;
+
+      case 8:
+        await salvarJogo();
+        break;
+
+      case 9:
+        await carregarJogo();
+        break;
+
+      case 0:
+        console.log("\nJogo encerrado. Até a próxima!");
+        return;
+
+      default:
+        console.log("Opção inválida.");
+    }
+  }
+}
+
+await menu();
+readline.close();
